@@ -6,11 +6,11 @@ Blog post: _(coming soon)_
 
 ## Why this exists
 
-This is a purposefully simplified version of something I built. The general problem is troubleshooting broken deploys; this repo narrows that to CloudFormation only and is meant as a starting point you can extend for your own use case. I had fun building this monstrosity of YAML and shell to do stuff with AI, but it is **not best practice** and not what a textbook reference architecture would look like.
+Running Claude Code locally is easy. Getting that same pattern onto shared cloud compute a team can trigger wasn't, at least when I built this. This repo is a simplified version of something I built for troubleshooting broken deploys, narrowed to CloudFormation only and meant as a starting point you can extend.
 
-I optimized for shipping a working prototype with the tools I already knew well. The newer managed options listed [further down](#what-you-might-want-instead) would let you skip most of this YAML. They didn't exist (or weren't mature) when I started.
+It is **not best practice**. I had fun building this monstrosity of YAML and shell to do stuff with AI, but it isn't what a textbook reference architecture would look like. I picked tools I already knew so I could ship a working prototype. The newer managed options listed [further down](#what-you-might-want-instead) would let you skip most of this YAML, but they either didn't exist or weren't mature when I started.
 
-Local Claude Code workflows are easy. Lifting that same pattern onto shared cloud compute a team can trigger wasn't, at least when I built this. I'm sharing it as one concrete path for cases where the newer managed offerings aren't a fit, and because a working-but-imperfect example tends to teach more than a polished demo.
+I'm sharing it as one concrete path for cases where those newer offerings aren't a fit, and because a working-but-imperfect example tends to teach more than a polished demo.
 
 ## Why these choices, at the time
 
