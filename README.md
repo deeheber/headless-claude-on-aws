@@ -10,6 +10,8 @@ This is a purposefully simplified version of something I built. The general prob
 
 I optimized for shipping a working prototype with the tools I already knew well. The newer managed options listed [further down](#what-you-might-want-instead) would let you skip most of this YAML. They didn't exist (or weren't mature) when I started.
 
+Local Claude Code workflows are easy. Lifting that same pattern onto shared cloud compute a team can trigger wasn't, at least when I built this. I'm sharing it as one concrete path for cases where the newer managed offerings aren't a fit, and because a working-but-imperfect example tends to teach more than a polished demo.
+
 ## Why these choices, at the time
 
 ### Why the Anthropic API directly, not Amazon Bedrock
