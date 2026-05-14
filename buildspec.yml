@@ -1,0 +1,109 @@
+version: 0.2
+
+env:
+  shell: bash
+  secrets-manager:
+    ANTHROPIC_API_KEY: cfn-investigator/anthropic-key
+    GITHUB_TOKEN: cfn-investigator/github-token
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 24
+      python: 3.13
+    commands:
+      - npm install -g @anthropic-ai/claude-code@latest
+      - pip install uv
+      - uv tool install mcp-proxy-for-aws
+      # Log versions so we can correlate behavior against upstream tool drift.
+      - claude --version
+      - uv --version
+      - uv tool list
+
+  pre_build:
+    commands:
+      - ': "${STACK_NAME:?STACK_NAME is required (pass via --environment-variables-override)}"'
+      # Write an assume-role profile. The MCP server subprocess picks this up via
+      # AWS_PROFILE=investigator (set in .mcp.json). The SDK handles the AssumeRole
+      # call internally using the CodeBuild service role's container-metadata creds
+      # as the source.
+      - |
+        mkdir -p ~/.aws
+        cat > ~/.aws/config <<EOF
+        [profile investigator]
+        role_arn = ${INVESTIGATOR_ROLE_ARN}
+        credential_source = EcsContainer
+        region = ${AWS_REGION}
+        EOF
+      # Pre-fetch commit metadata only if both REPO and COMMIT_SHA are provided.
+      # This is the only pre-fetch. Stack state is fetched by the agent itself
+      # via the AWS MCP server.
+      - |
+        if [ -n "${REPO:-}" ] && [ -n "${COMMIT_SHA:-}" ]; then
+          echo "Pre-fetching commit metadata for ${REPO}@${COMMIT_SHA}..."
+          gh api "repos/${REPO}/commits/${COMMIT_SHA}" > /tmp/commit.json || {
+            echo "Failed to fetch commit; continuing without commit context." >&2
+            echo '{}' > /tmp/commit.json
+          }
+        else
+          echo "No REPO/COMMIT_SHA provided; agent will run without commit context."
+          echo '{}' > /tmp/commit.json
+        fi
+
+  build:
+    commands:
+      - set -euo pipefail
+      - |
+        {
+          printf '%s\n' "Investigate the failing CloudFormation stack: $STACK_NAME"
+          printf '\n%s\n' "Commit context (may be empty if not provided):"
+          printf '```json\n'
+          cat /tmp/commit.json
+          printf '\n```\n'
+        } > /tmp/user-message.md
+      - |
+        claude -p --model sonnet \
+          --permission-mode dontAsk \
+          --strict-mcp-config \
+          --mcp-config ./.mcp.json \
+          --append-system-prompt-file ./system-prompt.md \
+          --allowedTools \
+            "Bash(*)" \
+            "mcp__aws-mcp" \
+          --max-turns 40 \
+          --max-budget-usd 5 \
+          --output-format stream-json \
+          --verbose \
+          < /tmp/user-message.md \
+          | tee /tmp/output.jsonl
+      # Try the happy path first: claude finished and wrote a "result" event.
+      # Fall back to the trailing assistant narration if it got cut short by
+      # --max-turns or --max-budget-usd. `|| true` keeps a jq failure from
+      # crashing the phase before the failure-case echo can run.
+      - |
+        jq -r 'select(.type=="result") | .result' /tmp/output.jsonl > /tmp/output.txt || true
+        if [ ! -s /tmp/output.txt ]; then
+          jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' /tmp/output.jsonl \
+            | tail -n 200 > /tmp/output.txt || true
+        fi
+
+  post_build:
+    commands:
+      - |
+        if [ "${CODEBUILD_BUILD_SUCCEEDING:-1}" = "1" ] && [ -s /tmp/output.txt ]; then
+          echo "===== Investigator analysis ====="
+          cat /tmp/output.txt
+          echo "===== End analysis ====="
+          # To ship the analysis to Slack (or swap in a Discord/Teams/SES/SNS/webhook
+          # equivalent), uncomment and adapt the block below. You'll also need to add
+          # a Slack bot token secret to investigator-stack.yml + env.secrets-manager
+          # above, and pass CHANNEL_ID at start-build time.
+          #
+          # curl -sS -X POST https://slack.com/api/chat.postMessage \
+          #   -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+          #   -H "Content-Type: application/json" \
+          #   --data "$(jq -n --arg ch "$CHANNEL_ID" --rawfile body /tmp/output.txt \
+          #     '{channel:$ch, text:$body}')" || true
+        else
+          echo "❌ Investigation failed, see ${CODEBUILD_BUILD_URL:-the CodeBuild console}"
+        fi

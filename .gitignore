@@ -1,0 +1,16 @@
+.claude/
+
+# macOS
+.DS_Store
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local env / secrets (defense in depth: real secrets live in AWS Secrets Manager,
+# but if you ever sketch something locally, don't let it sneak into a commit)
+.env
+.env.*
+.envrc

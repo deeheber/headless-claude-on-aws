@@ -1,0 +1,158 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  cfn-investigator: a CodeBuild project that runs Claude Code headlessly to
+  investigate a failing CloudFormation stack in the same AWS account. Creates
+  the build and agent IAM roles, two empty-shell secrets (populate manually
+  after deploy), a 30-day log group, and the CodeBuild project itself.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: cfn-investigator
+    Description: Name used for the CodeBuild project, log group, role names, and secret namespace.
+
+  CodeConnectionArn:
+    Type: String
+    Description: ARN of an existing CodeConnection used by CodeBuild to clone the investigator repo.
+
+  RepoUrl:
+    Type: String
+    Description: HTTPS URL of your fork of this repo, e.g. https://github.com/you/headless-claude-on-aws.git
+
+Resources:
+
+  InvestigatorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/codebuild/${ProjectName}
+      RetentionInDays: 30
+
+  AnthropicKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${ProjectName}/anthropic-key
+      Description: Anthropic API key used by Claude Code. Populate manually after deploy.
+
+  GitHubTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${ProjectName}/github-token
+      Description: Fine-grained GitHub PAT scoped to the app repo whose CFN stack is being investigated. Populate manually after deploy.
+
+  InvestigatorReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-readonly
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-build
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+      Description: Role the agent assumes via the AWS MCP server to read AWS state.
+
+  InvestigatorCodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-build
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteOwnLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}:*
+        - PolicyName: ReadInvestigatorSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref AnthropicKeySecret
+                  - !Ref GitHubTokenSecret
+        - PolicyName: UseCodeConnection
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codeconnections:GetConnectionToken
+                  - codeconnections:GetConnection
+                  - codeconnections:UseConnection
+                Resource: !Ref CodeConnectionArn
+        - PolicyName: AssumeReadOnlyRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-readonly
+
+  InvestigatorProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Ref ProjectName
+      Description: Runs Claude Code headlessly to investigate a failing CloudFormation stack.
+      ServiceRole: !GetAtt InvestigatorCodeBuildRole.Arn
+      TimeoutInMinutes: 20
+      Source:
+        Type: GITHUB
+        Location: !Ref RepoUrl
+        BuildSpec: buildspec.yml
+        Auth:
+          Type: CODECONNECTIONS
+          Resource: !Ref CodeConnectionArn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:8.0
+        EnvironmentVariables:
+          - Name: INVESTIGATOR_ROLE_ARN
+            Type: PLAINTEXT
+            Value: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-readonly
+          - Name: STACK_NAME
+            Type: PLAINTEXT
+            Value: ''
+          - Name: REPO
+            Type: PLAINTEXT
+            Value: ''
+          - Name: COMMIT_SHA
+            Type: PLAINTEXT
+            Value: ''
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref InvestigatorLogGroup
+
+Outputs:
+  ProjectName:
+    Value: !Ref InvestigatorProject
+    Description: CodeBuild project name. Pass to `aws codebuild start-build --project-name`.
+  BuildRoleArn:
+    Value: !GetAtt InvestigatorCodeBuildRole.Arn
+    Description: CodeBuild service role (build-time perms only).
+  ReadOnlyRoleArn:
+    Value: !GetAtt InvestigatorReadOnlyRole.Arn
+    Description: Role the agent assumes via the AWS MCP server.
+  AnthropicKeySecretArn:
+    Value: !Ref AnthropicKeySecret
+    Description: Populate manually via `aws secretsmanager put-secret-value`.
+  GitHubTokenSecretArn:
+    Value: !Ref GitHubTokenSecret
+    Description: Populate manually via `aws secretsmanager put-secret-value`.
