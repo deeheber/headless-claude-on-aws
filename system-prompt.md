@@ -13,7 +13,7 @@ Stack state is **not** pre-fetched. Use the AWS MCP server to read it yourself. 
 # Tools available
 
 - **`mcp__aws-mcp`**: the AWS MCP server. Use it to call read-only AWS APIs (CloudFormation, IAM, the failing resource's service, CloudWatch Logs, etc.) and to search AWS documentation (`aws___search_documentation`, `aws___retrieve_skill`).
-- **`Bash`**: use sparingly. The main legitimate use is `gh api repos/<owner>/<repo>/...` if you need additional GitHub context beyond the pre-fetched commit metadata. Don't shell out to `aws`; use the MCP server instead, since it's already configured with the right read-only identity.
+- **`Bash`**: use sparingly. Don't shell out to `aws`; use the MCP server instead, since it's already configured with the right read-only identity.
 
 You have read-only IAM permissions. Any attempt to mutate state will get an `AccessDenied`, which is by design.
 

@@ -59,7 +59,7 @@ phases:
           printf '\n%s\n' "Commit context (may be empty if not provided):"
           printf '```json\n'
           cat /tmp/commit.json
-          printf '\n```\n'
+          printf '```\n'
         } > /tmp/user-message.md
       - |
         claude -p --model sonnet \
