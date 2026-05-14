@@ -36,18 +36,19 @@ phases:
         region = ${AWS_REGION}
         EOF
       # Pre-fetch commit metadata only if both REPO and COMMIT_SHA are provided.
-      # This is the only pre-fetch. Stack state is fetched by the agent itself
-      # via the AWS MCP server.
+      # Project to a slim shape (no file patches) so a huge commit can't blow
+      # out the agent's context. The agent can pull a specific file's patch via
+      # `gh api` once it's narrowed the suspect.
       - |
         if [ -n "${REPO:-}" ] && [ -n "${COMMIT_SHA:-}" ]; then
           echo "Pre-fetching commit metadata for ${REPO}@${COMMIT_SHA}..."
-          gh api "repos/${REPO}/commits/${COMMIT_SHA}" > /tmp/commit.json || {
-            echo "Failed to fetch commit; continuing without commit context." >&2
-            echo '{}' > /tmp/commit.json
-          }
+          gh api "repos/${REPO}/commits/${COMMIT_SHA}" \
+            --jq '{sha, message: .commit.message, author: .commit.author.name, date: .commit.author.date, url: .html_url, files: [.files[] | {filename, status, additions, deletions}]}' \
+            > /tmp/commit-metadata.json \
+            || echo '{"error": "commit fetch failed - see gh stderr above"}' > /tmp/commit-metadata.json
         else
           echo "No REPO/COMMIT_SHA provided; agent will run without commit context."
-          echo '{}' > /tmp/commit.json
+          echo '{}' > /tmp/commit-metadata.json
         fi
 
   build:
@@ -58,7 +59,7 @@ phases:
           printf '%s\n' "Investigate the failing CloudFormation stack: $STACK_NAME"
           printf '\n%s\n' "Commit context (may be empty if not provided):"
           printf '```json\n'
-          cat /tmp/commit.json
+          cat /tmp/commit-metadata.json
           printf '```\n'
         } > /tmp/user-message.md
       - |
