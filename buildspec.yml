@@ -12,13 +12,11 @@ phases:
       nodejs: 24
       python: 3.13
     commands:
-      - npm install -g @anthropic-ai/claude-code@latest
-      - pip install uv
-      - uv tool install mcp-proxy-for-aws
+      - npm install -g @anthropic-ai/claude-code@2.1.143
+      - pip install uv==0.11.14
       # Log versions so we can correlate behavior against upstream tool drift.
       - claude --version
       - uv --version
-      - uv tool list
 
   pre_build:
     commands:
