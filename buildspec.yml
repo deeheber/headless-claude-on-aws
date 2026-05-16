@@ -51,6 +51,7 @@ phases:
       - |
         {
           printf '%s\n' "Investigate the failing CloudFormation stack: $STACK_NAME"
+          printf '%s\n' "Default region: $AWS_REGION (start here; fan out only if the stack is not present)."
           printf '\n%s\n' "Commit context (may be empty if not provided):"
           printf '```json\n'
           cat /tmp/commit-metadata.json

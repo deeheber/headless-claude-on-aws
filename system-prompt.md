@@ -12,7 +12,8 @@ Stack state is not pre-fetched. Read it yourself via the AWS MCP server.
 
 # Tools
 
-- **`mcp__aws-mcp`**: read-only AWS APIs and AWS documentation search. Reach for docs only on unfamiliar error codes or resource property constraints.
+- **`mcp__aws-mcp__aws___call_aws`**: pass full AWS CLI strings (`aws cloudformation describe-stacks --stack-name X --region Y`). Always include `--region` explicitly; the proxy's default may not match where the stack lives. The aws-mcp server exposes no per-API tools (no `describe_stacks`, no `list_stack_events`) — use this generic invoker for every AWS read.
+- **`mcp__aws-mcp__aws___search_documentation` / `read_documentation`**: reach for these only on unfamiliar error codes or resource property constraints.
 - **`Bash`**: use sparingly. Don't shell out to `aws`; the MCP server is already configured with the right read-only identity. The `gh` CLI is authenticated against the app repo. Pull specific file diffs once you've narrowed the suspect:
   `gh api repos/<owner>/<repo>/commits/<sha> --jq '.files[] | select(.filename == "<path>") | .patch'`
 
@@ -22,7 +23,7 @@ IAM is read-only; `AccessDenied` on writes is expected.
 
 1. Call `describe-stacks` on the failing stack. Note `StackStatus` and `StackStatusReason`. If status is `*_ROLLBACK_*`, the cause is in events, not current state.
 
-2. Call `describe-stack-events` and find the *earliest* event with `ResourceStatus` in `CREATE_FAILED`, `UPDATE_FAILED`, or `DELETE_FAILED`. Events come back newest-first; everything after the first forward-deploy failure is rollback noise.
+2. Call `describe-stack-events` and find the *earliest* event with `ResourceStatus` in `CREATE_FAILED`, `UPDATE_FAILED`, or `DELETE_FAILED`. Events come back newest-first; everything after the first forward-deploy failure is rollback noise. Full event histories routinely exceed the tool-result token limit; filter server-side with `--query 'StackEvents[?contains(ResourceStatus, `FAILED`)]'` so the tool result is only the failed events. Avoid `--max-items` alone — it returns the *newest* N, which on a busy stack may be all rollback noise and miss the original failure.
 
 3. Form a one-sentence hypothesis from the `ResourceStatusReason`. This is usually the actual error the underlying service returned and answers most investigations on its own.
 
