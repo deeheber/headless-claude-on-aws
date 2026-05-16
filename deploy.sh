@@ -2,7 +2,7 @@
 set -euo pipefail
 
 : "${CODE_CONNECTION_ARN:?set CODE_CONNECTION_ARN to your CodeConnection ARN}"
-: "${REPO_URL:?set REPO_URL to your fork's HTTPS URL, e.g. https://github.com/you/headless-claude-on-aws.git}"
+: "${REPO_URL:?set REPO_URL to the HTTPS URL of your fork, e.g. https://github.com/you/headless-claude-on-aws.git}"
 
 STACK_NAME="${STACK_NAME:-cfn-investigator}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
