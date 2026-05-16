@@ -1,6 +1,6 @@
 # cfn-investigator
 
-A CodeBuild project that runs Claude Code headlessly to investigate a failing CloudFormation stack in the same AWS account. The agent reads stack state and (optionally) the commit suspected of causing the failure, then writes a short markdown analysis to CloudWatch Logs. A commented-out placeholder in the buildspec shows how to ship the analysis on to Slack, Discord, Teams, SES, SNS, or whatever surface you prefer.
+A CodeBuild project that runs Claude Code headlessly to investigate a failing CloudFormation stack in the same AWS account. The agent reads stack state and (optionally) the commit suspected of causing the failure, then writes a short markdown analysis to CloudWatch Logs. A comment in the buildspec marks the spot where you can forward the analysis to Slack, Discord, Teams, SES, SNS, or whatever surface you prefer.
 
 Blog post: _(coming soon)_
 
@@ -8,7 +8,7 @@ Blog post: _(coming soon)_
 
 Running Claude Code locally is easy. Getting that same pattern onto shared cloud compute a team can trigger wasn't, at least when I built this. This repo is a simplified version of something I built for troubleshooting broken deploys, narrowed to CloudFormation only and meant as a starting point you can extend.
 
-It is **not best practice**. I had fun building this monstrosity of YAML and shell to do stuff with AI, but it isn't what a textbook reference architecture would look like. I picked tools I already knew so I could ship a working prototype. The newer managed options listed [further down](#what-you-might-want-instead) would let you skip most of this YAML, but they either didn't exist or weren't mature when I started.
+It is **not best practice**. I had fun building this monstrosity of YAML and bash to do stuff with AI, but it isn't what a textbook reference architecture would look like. I picked tools I already knew so I could ship a working prototype. The newer managed options listed [further down](#what-you-might-want-instead) would let you skip most of this YAML, but they either didn't exist or weren't mature when I started.
 
 I'm sharing it as one concrete path for cases where those newer offerings aren't a fit, and because a working-but-imperfect example tends to teach more than a polished demo.
 
@@ -20,13 +20,13 @@ I wanted to use an Anthropic API token and avoid the Bedrock-hosted-Claude limit
 
 ### Why CodeBuild, not Lambda
 
-Honestly: Lambda's 15-minute timeout gets cited a lot, but it isn't the binding constraint here. The longest investigation I've watched run was around 7 minutes. The bigger friction is everywhere else:
+Honestly: Lambda's 15-minute timeout gets cited a lot, but it isn't the binding constraint here. In practice the runs I've watched finish well under that ceiling. The bigger friction is everywhere else:
 
-- **No real shell out of the box.** The buildspec leans on `bash` with `pipefail`, `jq`, `gh`, `python3`, `npm install -g @anthropic-ai/claude-code`, and `uvx` for the MCP proxy. In Lambda I'd have to bake all of that into a container image and rebuild it every time a tool version bumped. CodeBuild's `aws/codebuild/standard:8.0` image ships with everything, and `runtime-versions: nodejs: 24, python: 3.13` is a one-line version pin.
-- **MCP servers are stdio subprocesses.** Lambda allows subprocesses but caps you at 1,024 processes and 1,024 file descriptors ([Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html)). In Lambda you'd also need to bake the MCP proxy into a container image or pay a cold-start fetch on every invocation. In CodeBuild it's a one-line `uv tool install`.
+- **No real shell out of the box.** The buildspec leans on `bash` with `pipefail`, `jq`, `gh`, `python3`, `npm install -g @anthropic-ai/claude-code`, and `uvx` for the MCP proxy. In Lambda I'd have to bake all of that into a container image and rebuild it every time a tool version bumped. CodeBuild's `aws/codebuild/standard:8.0` image ships with everything.
+- **MCP servers are stdio subprocesses.** Standard Lambda allows subprocesses but caps you at 1,024 processes and 1,024 file descriptors ([Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html)); Lambda Managed Instances raises these. In Lambda you'd also need to bake the MCP proxy into a container image or pay a cold-start fetch on every invocation. In CodeBuild it's a one-line `uv tool install`.
 - **Live log streaming is built in.** Stream-JSON output from Claude lands as live log lines you can `aws logs tail --follow` or watch in the CodeBuild console. Lambda batches its log output, so you don't get the same per-event view as the agent works.
 - **The mental model fits.** CodeBuild's idiom is "clone source, run a script, post somewhere." That *is* the investigator. Lambda inverts the lifecycle: the function is the long-lived artifact and the source is baked in at deploy time, so iterating on the prompt or buildspec equivalent means a redeploy instead of a git push.
-- **Familiarity is a real engineering trade-off.** I knew CodeBuild well, and time-to-working-prototype was the priority. Picking the stack you already understand is a legitimate call, especially for an internal tool with a small audience.
+- **Familiarity is an engineering trade-off.** I knew CodeBuild well and time-to-working-prototype was the priority.
 
 ### Why not Fargate
 
@@ -93,13 +93,6 @@ aws codebuild start-build \
 
 To test changes from a feature branch before merging, add `--source-version <branch>` as a top-level flag. That overrides the branch CodeBuild clones for the investigator repo itself (not the app repo being investigated).
 
-**In a real setup, you wouldn't run this by hand.** The point of the investigator is to fire automatically when a deploy breaks. A few common ways to wire that up (out of scope for this repo, but worth pointing at):
-
-- An EventBridge rule matching `CloudFormation Stack Status Change` events filtered on `detail.status-details.status` in `(CREATE_FAILED, ROLLBACK_IN_PROGRESS, UPDATE_ROLLBACK_IN_PROGRESS, UPDATE_FAILED)`, with a Lambda target that pulls the stack name + (if available) the commit SHA from your pipeline and calls `codebuild:StartBuild` with the right env vars.
-- A CodePipeline failure notification (via SNS or EventBridge) into a Lambda that does the same.
-- A CodeBuild pipeline-stage failure rule, same shape.
-- An SSM parameter "kill-switch" the trigger Lambda reads on each invocation, so you can pause automated runs during incidents without redeploying. Not in this repo because there's no auto-trigger here; the pattern lives in the trigger Lambda, not in the investigator stack.
-
 ## Watching results, and shipping somewhere
 
 Stream the build live:
@@ -110,16 +103,23 @@ aws logs tail /aws/codebuild/cfn-investigator --follow
 
 …or watch in the CodeBuild console. The final analysis lands between `===== Investigator analysis =====` markers in the post-build log.
 
-To push it elsewhere, uncomment the Slack placeholder in `buildspec.yml` (post_build phase) and swap in your own surface: Discord/Teams webhook, an SNS topic that fans out to email/SMS, SES, a custom webhook, etc. Wiring it up means:
+To push it elsewhere, the `post_build` phase of `buildspec.yml` has a one-line pointer where you add an outbound call to your service of choice (Slack, Discord, Teams webhook, SNS, SES, custom webhook, etc.):
 
-1. Add the relevant secret (e.g., `slack-bot-token`) to `investigator-stack.yml` + `env.secrets-manager` in `buildspec.yml`.
-2. Pass per-build env vars (channel ID, webhook URL) at `start-build` time.
-3. Uncomment the placeholder.
+- Add the relevant secret to `investigator-stack.yml` and to `env.secrets-manager` in `buildspec.yml`.
+- Pass any per-build values (channel ID, webhook URL, topic ARN) at `start-build` time.
+
+## Wiring up an auto-trigger
+
+**In a real setup, you wouldn't run this by hand.** The point of the investigator is to fire automatically when a deploy breaks. A few common ways to wire that up, out of scope for this repo but worth pointing at:
+
+- An EventBridge rule on `CloudFormation Stack Status Change` events, filtered to the `CREATE_FAILED` / `UPDATE_FAILED` / `*_ROLLBACK_*` statuses, with a Lambda target that calls `codebuild:StartBuild`.
+- A CodePipeline failure notification (via SNS or EventBridge) into a Lambda that does the same.
+- A CodeBuild pipeline-stage failure rule, same shape.
 
 ## Notes on what this demo skips
 
 - **`ReadOnlyAccess` is broad.** The agent role uses AWS-managed `ReadOnlyAccess`. In a real setup, scope it to the services CFN troubleshooting actually reads (`cloudformation`, `lambda`, `ecs`, `ecr`, `logs`, IAM read-only).
-- **The two-role split scopes the MCP server, not the agent.** The split bounds AWS calls *routed through MCP* to `ReadOnlyAccess`. It does not sandbox Claude itself: the agent runs in the same container as the build, so it can read env-var secrets and hit `169.254.170.2` to pick up the build role's credentials.
-- **`credential_source = EcsContainer` is ergonomic.** It lets the SDK pull the build role's credentials from `169.254.170.2` and use them as the source for `AssumeRole`. Both identities stay available (no profile = build role, `AWS_PROFILE=investigator` = read-only role) and the SDK handles refresh.
+- **The two-role split scopes the MCP server, not the agent.** It bounds AWS calls *routed through MCP* to `ReadOnlyAccess`. It does not sandbox Claude itself: the agent runs in the same container as the build, so it can read the build role's credentials.
+- **`credential_source = EcsContainer` is ergonomic.** The SDK pulls the build role's credentials from the container metadata endpoint and uses them to assume the read-only role, with both identities staying available (no profile = build role, `AWS_PROFILE=investigator` = read-only role).
 - **Tools are installed at runtime, not baked into an image.** Every build runs `npm install -g @anthropic-ai/claude-code`, `pip install uv`, and `uv tool install mcp-proxy-for-aws` fresh. Fine for a low-frequency on-demand tool. In a production setup where the investigator fires often, bake the tools into a custom CodeBuild image.
-- **The MCP server endpoint is hardcoded.** `.mcp.json` points at `aws-mcp.us-east-1.api.aws` (GA in `us-east-1` and `eu-central-1`). The `AWS_REGION` metadata is independent and can target any region. To investigate stacks elsewhere, change `AWS_REGION` in `.mcp.json`.
+- **The MCP server endpoint is hardcoded.** `.mcp.json` points at `aws-mcp.us-east-1.api.aws` (GA in `us-east-1` and `eu-central-1`). To investigate stacks elsewhere, change `AWS_REGION` in `.mcp.json`.

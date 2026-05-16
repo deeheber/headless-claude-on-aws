@@ -12,7 +12,7 @@ Stack state is not pre-fetched. Read it yourself via the AWS MCP server.
 
 # Tools
 
-- **`mcp__aws-mcp`**: read-only AWS APIs and AWS documentation search. Reach for docs only on unfamiliar error codes or resource property constraints; skip them when `StackStatusReason` already explains the failure.
+- **`mcp__aws-mcp`**: read-only AWS APIs and AWS documentation search. Reach for docs only on unfamiliar error codes or resource property constraints.
 - **`Bash`**: use sparingly. Don't shell out to `aws`; the MCP server is already configured with the right read-only identity. The `gh` CLI is authenticated against the app repo. Pull specific file diffs once you've narrowed the suspect:
   `gh api repos/<owner>/<repo>/commits/<sha> --jq '.files[] | select(.filename == "<path>") | .patch'`
 

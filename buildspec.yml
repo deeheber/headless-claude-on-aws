@@ -14,17 +14,15 @@ phases:
     commands:
       - npm install -g @anthropic-ai/claude-code@2.1.143
       - pip install uv==0.11.14
-      # Log versions so we can correlate behavior against upstream tool drift.
+      # Log tool versions for debugging.
       - claude --version
       - uv --version
 
   pre_build:
     commands:
       - ': "${STACK_NAME:?STACK_NAME is required (pass via --environment-variables-override)}"'
-      # Write an assume-role profile. The MCP server subprocess picks this up via
-      # AWS_PROFILE=investigator (set in .mcp.json). The SDK handles the AssumeRole
-      # call internally using the CodeBuild service role's container-metadata creds
-      # as the source.
+      # Profile that .mcp.json resolves via AWS_PROFILE=investigator.
+      # The SDK assumes the read-only role on demand.
       - |
         mkdir -p ~/.aws
         cat > ~/.aws/config <<EOF
@@ -33,10 +31,8 @@ phases:
         credential_source = EcsContainer
         region = ${AWS_REGION}
         EOF
-      # Pre-fetch commit metadata only if both REPO and COMMIT_SHA are provided.
-      # Project to a slim shape (no file patches) so a huge commit can't blow
-      # out the agent's context. The agent can pull a specific file's patch via
-      # `gh api` once it's narrowed the suspect.
+      # If REPO and COMMIT_SHA are provided, pre-fetch commit metadata.
+      # Patches are stripped here so a large commit doesn't flood the context window.
       - |
         if [ -n "${REPO:-}" ] && [ -n "${COMMIT_SHA:-}" ]; then
           echo "Pre-fetching commit metadata for ${REPO}@${COMMIT_SHA}..."
@@ -75,10 +71,8 @@ phases:
           --verbose \
           < /tmp/user-message.md \
           | tee /tmp/output.jsonl
-      # Try the happy path first: claude finished and wrote a "result" event.
-      # Fall back to the trailing assistant narration if it got cut short by
-      # --max-turns or --max-budget-usd. `|| true` keeps a jq failure from
-      # crashing the phase before the failure-case echo can run.
+      # Prefer the final "result" event. Fall back to the trailing assistant
+      # text if the run was cut short by --max-turns or --max-budget-usd.
       - |
         jq -r 'select(.type=="result") | .result' /tmp/output.jsonl > /tmp/output.txt || true
         if [ ! -s /tmp/output.txt ]; then
@@ -93,16 +87,7 @@ phases:
           echo "===== Investigator analysis ====="
           cat /tmp/output.txt
           echo "===== End analysis ====="
-          # To ship the analysis to Slack (or swap in a Discord/Teams/SES/SNS/webhook
-          # equivalent), uncomment and adapt the block below. You'll also need to add
-          # a Slack bot token secret to investigator-stack.yml + env.secrets-manager
-          # above, and pass CHANNEL_ID at start-build time.
-          #
-          # curl -sS -X POST https://slack.com/api/chat.postMessage \
-          #   -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-          #   -H "Content-Type: application/json" \
-          #   --data "$(jq -n --arg ch "$CHANNEL_ID" --rawfile body /tmp/output.txt \
-          #     '{channel:$ch, text:$body}')" || true
+          # To forward this analysis to Slack/Discord/Teams/SNS/SES/etc., POST it to your service of choice here.
         else
           echo "❌ Investigation failed, see ${CODEBUILD_BUILD_URL:-the CodeBuild console}"
         fi
